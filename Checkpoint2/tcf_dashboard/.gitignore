@@ -58,8 +58,8 @@ Thumbs.db
 *.tmp
 *.temp
 
-# Keep organized dashboard structure
-!tcf_dashboard/
-!tcf_dashboard/data/
-!tcf_dashboard/data/*.csv
-!tcf_dashboard/data/*.xlsx
+# Data files (keep specific ones)
+*.csv
+*.xlsx
+!data/*.csv
+!data/*.xlsx

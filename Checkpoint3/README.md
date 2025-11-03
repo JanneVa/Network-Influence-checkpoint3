@@ -59,16 +59,19 @@ Run the notebook to produce the artifacts consumed by the dashboard.
 
 1) Open the notebook and run all cells:
 
-   - File: Fase1_Advanced_Cleaning.ipynb
+   - File: NotebookC3.ipynb
    - It will create:
      - data/processed/youtube_clean.csv
      - data/processed/youtube_clean_no_outliers.csv
      - data/processed/youtube_edges.csv
      - data/processed/youtube_nodes.csv
-     - data/processed/hierarchy_treemap.csv
-     - data/processed/linkage_matrix.npy
-     - data/processed/dendrogram_node_labels.csv
-     - reports/figures/*.png (treemap, donut, dendrogram, etc.)
+     - reports/figures/viz_treemap_multi_level.png
+     - reports/figures/viz_sunburst_multi_level.png
+     - reports/figures/viz_dendrogram.png
+     - reports/figures/hist_tamano_comunidades.png
+     - reports/figures/box_tamano_comunidades.png
+     
+   Note: The dashboard will generate `hierarchy_treemap.csv` dynamically from `youtube_clean_no_outliers.csv` if it doesn't exist.
 
 Run the Streamlit dashboard
 ---------------------------

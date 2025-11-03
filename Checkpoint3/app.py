@@ -5,6 +5,10 @@ import streamlit as st
 import matplotlib.pyplot as plt
 import networkx as nx
 from typing import Optional
+import plotly.express as px
+import plotly.figure_factory as ff
+import scipy.cluster.hierarchy as sch
+from sklearn.preprocessing import StandardScaler
 
 # --- Theme tweaks for friendlier visuals ---
 st.set_page_config(page_title="Network Influence Dashboard", layout="wide")
@@ -24,8 +28,11 @@ NODE_LABELS = os.path.join(PROC_DIR, "dendrogram_node_labels.csv")
 HIER_TREEMAP = os.path.join(PROC_DIR, "hierarchy_treemap.csv")
 
 DENDRO_PNG = os.path.join(FIG_DIR, "viz_dendrogram.png")
-TREEMAP_PNG = os.path.join(FIG_DIR, "viz_treemap_squarify.png")
-DONUT_PNG = os.path.join(FIG_DIR, "viz_donut_approximation.png")
+TREEMAP_PNG = os.path.join(FIG_DIR, "viz_treemap_multi_level.png")
+SUNBURST_PNG = os.path.join(FIG_DIR, "viz_sunburst_multi_level.png")
+# Fallback paths for older notebook versions
+TREEMAP_PNG_OLD = os.path.join(FIG_DIR, "viz_treemap_squarify.png")
+DONUT_PNG_OLD = os.path.join(FIG_DIR, "viz_donut_approximation.png")
 
 st.title("Network Performance Dashboard")
 st.caption("We identify the key people who amplify your reach and prioritize simple, high‑impact actions.")
@@ -52,45 +59,149 @@ def build_graph(edges_df: pd.DataFrame) -> Optional[nx.Graph]:
     except Exception:
         return None
 
+@st.cache_data(show_spinner=False)
+def generate_hierarchy_treemap(clean_df: pd.DataFrame) -> Optional[pd.DataFrame]:
+    """Generate hierarchy_treemap.csv dynamically from clean_df if it doesn't exist."""
+    if clean_df is None or len(clean_df) == 0:
+        return None
+    try:
+        def size_group(size):
+            if size >= 15:
+                return "Big (>=15 people)"
+            elif size >= 8:
+                return "Medium (8-14 people)"
+            else:
+                return "Small (3-7 people)"
+        
+        df = clean_df.copy()
+        df["size_group"] = df["size_cleaned"].apply(size_group)
+        df["Root"] = "YouTube_Communities"
+        hierarchy_df = df.groupby(["Root", "size_group", "community_id"])["size_cleaned"].sum().reset_index(name="members_count")
+        return hierarchy_df
+    except Exception:
+        return None
+
+@st.cache_data(show_spinner=False)
+def generate_interactive_dendrogram(nodes_df: pd.DataFrame, sample_size: int = 30):
+    """Generate interactive dendrogram using Plotly with full display and zoom capabilities."""
+    if nodes_df is None or len(nodes_df) == 0:
+        return None
+    try:
+        sample_df = nodes_df.sample(n=min(sample_size, len(nodes_df)), random_state=1)
+        scaler = StandardScaler()
+        sample_scaled = scaler.fit_transform(sample_df[['degree', 'weighted_degree']])
+        
+        # Create interactive dendrogram with Plotly
+        fig = ff.create_dendrogram(
+            sample_scaled,
+            orientation='bottom',
+            labels=sample_df['node'].astype(str).tolist(),
+            linkagefun=lambda x: sch.linkage(x, method='ward')
+        )
+        
+        # Update layout for better display and interactivity
+        fig.update_layout(
+            title=dict(
+                text=' Dendrograma de Clustering Jerárquico (Interactive)',
+                x=0.5,
+                xanchor='center',
+                font=dict(size=16)
+            ),
+            xaxis=dict(
+                title='Nodos (ID)',
+                tickangle=-45,
+                tickfont=dict(size=9),
+                showgrid=True,
+                gridcolor='lightgray',
+                automargin=True
+            ),
+            yaxis=dict(
+                title='Distancia (Ward)',
+                showgrid=True,
+                gridcolor='lightgray',
+                automargin=True
+            ),
+            height=900,
+            autosize=True,
+            margin=dict(l=80, r=50, t=120, b=180),
+            hovermode='closest',
+            plot_bgcolor='white',
+            paper_bgcolor='white'
+        )
+        
+        # Enable zoom and pan interactions
+        fig.update_xaxes(fixedrange=False)
+        fig.update_yaxes(fixedrange=False)
+        
+        return fig
+    except Exception as e:
+        st.error(f"Error generating dendrogram: {e}")
+        return None
+
+@st.cache_data(show_spinner=False)
+def generate_interactive_treemap(hierarchy_df: pd.DataFrame):
+    """Generate interactive treemap using Plotly."""
+    if hierarchy_df is None or len(hierarchy_df) == 0:
+        return None
+    try:
+        treemap_data = hierarchy_df.groupby(['Root', 'size_group']).agg({'members_count': 'sum'}).reset_index()
+        
+        fig = px.treemap(
+            treemap_data,
+            path=[px.Constant("YouTube Communities"), 'Root', 'size_group'],
+            values='members_count',
+            color='members_count',
+            color_continuous_scale='Blues',
+            title='Treemap de Comunidades por Tamaño (Interactive)'
+        )
+        
+        fig.update_layout(margin=dict(t=50, l=25, r=25, b=25))
+        return fig
+    except Exception as e:
+        st.error(f"Error generating treemap: {e}")
+        return None
+
+@st.cache_data(show_spinner=False)
+def generate_interactive_sunburst(hierarchy_df: pd.DataFrame):
+    """Generate interactive sunburst using Plotly with percentages."""
+    if hierarchy_df is None or len(hierarchy_df) == 0:
+        return None
+    try:
+        sunburst_data = hierarchy_df.groupby(['Root', 'size_group']).agg({'members_count': 'sum'}).reset_index()
+        
+        fig = px.sunburst(
+            sunburst_data,
+            path=['Root', 'size_group'],
+            values='members_count',
+            color='members_count',
+            color_continuous_scale='Blues',
+            title='Sunburst de Comunidades por Tamaño (Interactive)'
+        )
+        
+        fig.update_traces(
+            texttemplate='%{label}<br>%{percentEntry:.1%}',
+            textinfo='label+percent entry',
+            hovertemplate='<b>%{label}</b><br>Miembros: %{value:,.0f}<br>Porcentaje del total: %{percentEntry:.1%}<extra></extra>'
+        )
+        
+        fig.update_layout(margin=dict(t=50, l=25, r=25, b=25))
+        return fig
+    except Exception as e:
+        st.error(f"Error generating sunburst: {e}")
+        return None
+
 # --- Sidebar: Simple vs Advanced ---
 st.sidebar.header("Display mode")
-simple_mode = st.sidebar.toggle("Simple mode (recommended)", value=True, help="KPI and action‑focused view. Switch off to see the network and advanced controls.")
-
-# Basic filters (kept simple)
-min_edge_weight = 3
-show_top_n = 20
-
-# Advanced controls (hidden in simple mode)
-use_pagerank = False
-use_betweenness = False
-k_sample = 300
-w_wdeg = 0.5
-w_pr = 0.3
-w_bw = 0.2
-
-if not simple_mode:
-    st.sidebar.subheader("Network filters")
-    min_edge_weight = st.sidebar.slider("Minimum edge weight", 1, 50, 3, 1)
-    show_top_n = st.sidebar.slider("Top N nodes by influence", 10, 300, 80, 10)
-
-    st.sidebar.subheader("Centralities (optional)")
-    use_pagerank = st.sidebar.checkbox("Compute PageRank", value=False)
-    use_betweenness = st.sidebar.checkbox("Compute Betweenness (approx.)", value=False)
-    if use_betweenness:
-        k_sample = st.sidebar.slider("Betweenness sampling (k)", 50, 1500, 400, 50)
-
-    st.sidebar.subheader("Score weighting")
-    w_wdeg = st.sidebar.slider("Weighted_degree weight", 0.0, 1.0, 0.6, 0.05)
-    w_pr = st.sidebar.slider("PageRank weight", 0.0, 1.0, 0.25, 0.05)
-    w_bw = st.sidebar.slider("Betweenness weight", 0.0, 1.0, 0.15, 0.05)
-    s = max(w_wdeg + w_pr + w_bw, 1e-9)
-    w_wdeg, w_pr, w_bw = w_wdeg / s, w_pr / s, w_bw / s
+simple_mode = st.sidebar.toggle("Simple mode (recommended)", value=True, help="Focused view with KPIs and community visualizations. Switch off for advanced overview.")
 
 # --- Load Data ---
 clean_df = load_csv(CLEAN_NO_OUT)
 edges_df = load_csv(EDGES_CSV)
 nodes_df = load_csv(NODES_CSV)
+# Try to load hierarchy_treemap, if not found generate it dynamically from clean_df
 hier_df = load_csv(HIER_TREEMAP)
+if hier_df is None and clean_df is not None:
+    hier_df = generate_hierarchy_treemap(clean_df)
 
 # --- Simple Mode (digestible, story-first) ---
 if simple_mode:
@@ -108,7 +219,7 @@ if simple_mode:
     st.markdown("---")
     st.subheader(" Contacts that amplify your reach")
     if nodes_df is None or len(nodes_df) == 0:
-        st.info("Ejecuta primero la notebook para generar los archivos en data/processed.")
+        st.info("Run the notebook first to generate files in data/processed.")
     else:
         top = nodes_df.sort_values("weighted_degree", ascending=False).head(8)
         # Bar chart simple
@@ -121,7 +232,7 @@ if simple_mode:
         st.pyplot(fig)
 
         # Mensaje explicativo para el perfil de interés
-        st.markdown("The chart highlights the **top contacts by connection strength** — the ones who **amplify Ana Sofía Mendoza’s reach** across her professional network.")
+        st.markdown("The chart highlights the **top contacts by connection strength** — the ones who **amplify Ana Sofía Mendoza's reach** across her professional network.")
 
     st.markdown("---")
     st.subheader(" Network focus")
@@ -129,8 +240,8 @@ if simple_mode:
 
 # --- Advanced Mode (for analysts/managers) ---
 else:
-    overview_tab, network_tab, hierarchy_tab, reco_tab, method_tab = st.tabs([
-        "Overview", "Network & Influence", "Hierarchies & Segments", "Recommendations", "Methodology"
+    overview_tab, visualizations_tab, method_tab = st.tabs([
+        "Overview", "Visualizations (Section 7)", "Methodology"
     ])
 
     with overview_tab:
@@ -148,148 +259,134 @@ else:
         c4.metric("Approx. density", f"{density:.4f}")
 
         st.markdown("---")
-        if nodes_df is not None and len(nodes_df) > 0:
-            st.subheader("Top nodes by weighted_degree")
-            top_nodes_tbl = nodes_df.sort_values("weighted_degree", ascending=False).head(5)[["node", "weighted_degree"]]
-            c = st.columns(5)
-            for i, (_, r) in enumerate(top_nodes_tbl.iterrows()):
-                c[i].metric(label=f"Top {i+1}", value=str(r["node"]), delta=f"wd={int(r['weighted_degree'])}")
-            st.markdown("- These contacts are the ones that amplify messages the most due to their weighted connections. They usually provide the highest incremental reach..")
-        else:
-            st.info("Aún no se han generado los nodos.")
-
-        st.markdown("---")
-        c1, c2 = st.columns(2)
-        with c1:
-            if os.path.exists(TREEMAP_PNG):
-                st.image(TREEMAP_PNG, caption="Communities treemap")
-            else:
-                st.info("Treemap no disponible. Genera las figuras desde la notebook.")
-        with c2:
-            if os.path.exists(DONUT_PNG):
-                st.image(DONUT_PNG, caption="Communities percentage (Donut)")
-            else:
-                st.info("Donut no disponible. Genera las figuras desde la notebook.")
-
-        # Insight block under Overview visuals
         st.markdown(
             """
-            ##  Network Insights: Community Size Distribution
+            ## Network Insights: Community Size Distribution
 
-            ###  Key Takeaway
-            More than **half of the communities (52%)** in the network are *small groups* (3–7 members).
-
-            ###  Why It Matters
+    
+            ### Why It Matters
             For digital marketing professionals like **Ana Sofía Mendoza**, this insight reveals that:
             - Most engagement happens within **microcommunities**.  
             - **Personalized campaigns** and **micro-influencer strategies** can achieve higher conversion rates.  
             - Large-scale messages are **less effective** in a fragmented network.
 
-            ###  Strategic Application
+            ### Strategic Application
             - Focus ad spend on **smaller, high-interaction clusters**.  
             - Identify **connectors** within medium groups (8–14 members) to expand organically.  
             - Use data analytics to replicate the growth patterns of the **16% large communities**.
 
-            ###  Impact
+            ### Impact
             Understanding community size enables **better audience segmentation**, **optimized paid media**, and **sustained growth strategies**.
             """
         )
 
-    with network_tab:
-        st.subheader("Network & Influence")
-        if edges_df is None or nodes_df is None:
-            st.info("Faltan archivos de aristas/nodos.")
+    with visualizations_tab:
+        st.subheader("Visualizations from Section 7: Graphs for Streamlit Visualization")
+        st.markdown("These visualizations provide strategic insights into the network structure and community distribution.")
+        
+        st.markdown("---")
+        st.markdown("### 1. Dendrograma de Clustering Jerárquico")
+        dendro_fig = generate_interactive_dendrogram(nodes_df, sample_size=30)
+        if dendro_fig is not None:
+            st.plotly_chart(
+                dendro_fig, 
+                config={
+                    'displayModeBar': True,
+                    'modeBarButtonsToAdd': ['zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'],
+                    'displaylogo': False
+                },
+                use_container_width=True
+            )
+            st.markdown("""
+            **Purpose:** Identifies natural clusters of nodes based on similarity in degree and weighted_degree.
+            
+            **About the chart:**
+            - Nodes that merge at lower distances are more similar
+            - Long vertical lines indicate distinct groups
+            - Use this to identify natural audience segments for personalized campaigns
+            
+            
+            """)
         else:
-            filt_edges = edges_df[edges_df["weight"] >= min_edge_weight].copy()
-            st.write(f"Edges after filter ≥ {min_edge_weight}: {len(filt_edges):,}")
-            top_nodes_list = nodes_df.sort_values("weighted_degree", ascending=False).head(show_top_n)["node"].astype(str).tolist()
-            sub_edges = filt_edges[filt_edges["source"].astype(str).isin(top_nodes_list) & filt_edges["target"].astype(str).isin(top_nodes_list)]
-            G = build_graph(sub_edges)
-            if G is None or G.number_of_nodes() == 0:
-                st.warning("No hay subgrafo para los filtros.")
-            else:
-                pr_dict, bw_dict = {}, {}
-                if use_pagerank:
-                    try: pr_dict = nx.pagerank(G, weight="weight")
-                    except Exception: pr_dict = {}
-                if use_betweenness:
-                    try: bw_dict = nx.betweenness_centrality(G, k=min(k_sample, G.number_of_nodes()), weight="weight", seed=42)
-                    except Exception: bw_dict = {}
-
-                fig, ax = plt.subplots(figsize=(8, 6))
-                pos = nx.spring_layout(G, seed=42, k=0.2)
-                wd_series = nodes_df.set_index("node")["weighted_degree"] if nodes_df is not None and "node" in nodes_df else pd.Series(dtype=float)
-                sizes = []
-                for n in G.nodes():
-                    key = str(n)
-                    val = wd_series.get(key, 0) if key in wd_series.index else 0
-                    sizes.append(5 + 0.5 * float(val))
-                nx.draw_networkx_edges(G, pos, ax=ax, alpha=0.15)
-                nx.draw_networkx_nodes(G, pos, ax=ax, node_size=sizes, node_color=PRIMARY)
-                ax.set_title("Subgraph of influential nodes")
-                ax.axis("off")
-                st.pyplot(fig)
-
-                selected_nodes = nodes_df[nodes_df["node"].astype(str).isin(list(G.nodes()))].copy()
-                if use_pagerank: selected_nodes["pagerank"] = selected_nodes["node"].astype(str).map(pr_dict).fillna(0)
-                if use_betweenness: selected_nodes["betweenness"] = selected_nodes["node"].astype(str).map(bw_dict).fillna(0)
-                st.markdown("- Larger nodes are hubs: collaborating with them spreads messages faster.\n- Adjust the weight filter to remove noise and keep strong relationships.")
-
-    with hierarchy_tab:
-        st.subheader("Hierarchies & Segments")
+            st.info("Dendrogram not available. Ensure nodes_df is loaded from the notebook (Section 7).")
+        
+        st.markdown("---")
+        st.markdown("### 2. Treemap de Comunidades por Tamaño")
         c1, c2 = st.columns(2)
         with c1:
-            if os.path.exists(DENDRO_PNG):
-                st.image(DENDRO_PNG, caption="Dendrogram — similarity among top nodes")
+            treemap_fig = generate_interactive_treemap(hier_df)
+            if treemap_fig is not None:
+                st.plotly_chart(
+                    treemap_fig, 
+                    config={
+                        'displayModeBar': True,
+                        'modeBarButtonsToAdd': ['zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'],
+                        'displaylogo': False
+                    },
+                    use_container_width=True
+                )
             else:
-                st.info("Dendrograma no disponible. Genera la matriz de linkage desde la notebook.")
+                st.info("Treemap not available. Ensure hierarchy_treemap.csv is loaded or clean_no_outliers.csv exists.")
         with c2:
-            if hier_df is not None and len(hier_df) > 0:
-                st.markdown("**How to read it:** The treemap groups communities by size (Small/Medium/Large).\n- Use it to balance tactics: personalized messages in small groups and scalable content in larger ones.")
-            else:
-                st.info("Jerarquía Treemap no disponible. Ejecuta la notebook para crear hierarchy_treemap.csv.")
-
-    with reco_tab:
-        st.subheader("Connection recommendations")
-        if nodes_df is None or len(nodes_df) == 0:
-            st.info("No hay nodos para recomendar.")
+            st.markdown("""
+            **Purpose:** Shows the absolute distribution of members across community size categories.
+            
+            **About the chart**
+            - Each rectangle represents communities grouped by size
+            - Larger rectangles = more members in that category
+           
+            
+            **Strategic insight:**
+            - **Small communities (3-7)**: Ideal for personalized engagement and deep relationships
+            - **Medium communities (8-14)**: Balance between personalization and reach
+            - **Large communities (≥15)**: Perfect for mass campaigns and broad reach
+            
+            **Use case:** Optimize resource allocation based on absolute member concentration
+            """)
+        
+        st.markdown("---")
+        st.markdown("### 3. Sunburst de Comunidades por Tamaño")
+        sunburst_fig = generate_interactive_sunburst(hier_df)
+        if sunburst_fig is not None:
+            st.plotly_chart(
+                sunburst_fig, 
+                config={
+                    'displayModeBar': True,
+                    'modeBarButtonsToAdd': ['zoom2d', 'pan2d', 'select2d', 'lasso2d', 'zoomIn2d', 'zoomOut2d', 'autoScale2d', 'resetScale2d'],
+                    'displaylogo': False
+                },
+                use_container_width=True
+            )
+            st.markdown("""
+            **Purpose:** Shows the proportional distribution of members across community size categories.
+            
+            **About the chart:**
+            - Center represents total YouTube Communities
+            - Outer rings show size categories with percentages
+            - Each segment shows the proportion of total members
+            
+            
+            **Strategic application:**
+            - Use percentages to allocate marketing resources effectively
+            - Understand the relative distribution of your audience
+            - Balance tactics between small, medium, and large communities
+            
+            **Use case:** Make strategic decisions based on proportional distribution rather than absolute numbers
+            """)
         else:
-            df_score = nodes_df.copy()
-            def norm_col(s: pd.Series) -> pd.Series:
-                if s is None or len(s) == 0: return pd.Series(np.zeros(0))
-                s = s.fillna(0).astype(float)
-                rng = s.max() - s.min()
-                return (s - s.min()) / rng if rng > 0 else s * 0
-            pr_full, bw_full = None, None
-            if use_pagerank and edges_df is not None:
-                try:
-                    G_full = build_graph(edges_df)
-                    pr_full = nx.pagerank(G_full, weight="weight") if G_full is not None else {}
-                    df_score["pagerank"] = df_score["node"].astype(str).map(pr_full).fillna(0)
-                except Exception:
-                    df_score["pagerank"] = 0.0
-            if use_betweenness and edges_df is not None:
-                try:
-                    G_full = build_graph(edges_df)
-                    k_eff = min(500, G_full.number_of_nodes()) if G_full is not None else 0
-                    bw_full = nx.betweenness_centrality(G_full, k=k_eff, weight="weight", seed=42) if G_full is not None else {}
-                    df_score["betweenness"] = df_score["node"].astype(str).map(bw_full).fillna(0)
-                except Exception:
-                    df_score["betweenness"] = 0.0
-            df_score["wd_norm"] = norm_col(df_score.get("weighted_degree", pd.Series(dtype=float)))
-            df_score["pr_norm"] = norm_col(df_score.get("pagerank", pd.Series(dtype=float))) if use_pagerank else 0.0
-            df_score["bw_norm"] = norm_col(df_score.get("betweenness", pd.Series(dtype=float))) if use_betweenness else 0.0
-            s = max(w_wdeg + w_pr + w_bw, 1e-9)
-            w_wdeg_n, w_pr_n, w_bw_n = w_wdeg / s, w_pr / s, w_bw / s
-            df_score["reco_score"] = w_wdeg_n * df_score["wd_norm"] + w_pr_n * df_score["pr_norm"] + w_bw_n * df_score["bw_norm"]
-
-            top_n = st.slider("Number of recommendations", 5, 50, 12, 3)
-            rec_cols = ["node", "degree", "weighted_degree", "reco_score"]
-            if use_pagerank: rec_cols.insert(3, "pagerank")
-            if use_betweenness: rec_cols.insert(3 if use_pagerank else 3, "betweenness")
-            rec = df_score.sort_values("reco_score", ascending=False).head(top_n)[rec_cols].rename(columns={"node": "candidate_node"})
-            st.markdown(f"Suggested **{len(rec)}** contacts prioritized by potential impact. Download the CSV for outreach.")
-            st.download_button("Download recommendations (CSV)", rec.to_csv(index=False).encode("utf-8"), file_name="influence_recommendations.csv", mime="text/csv")
+            st.info("Sunburst chart not available. Ensure hierarchy_treemap.csv is loaded or clean_no_outliers.csv exists.")
+        
+        st.markdown("---")
+        st.markdown("### Combined Strategic Value")
+        st.markdown("""
+        These three visualizations work together to provide a comprehensive understanding:
+        
+        - **Dendrogram**: Identifies *natural groupings* based on similarity
+        - **Treemap**: Shows *absolute volume* and member concentration
+        - **Sunburst**: Displays *proportional distribution* with percentages
+        
+        Together, they enable data-driven decisions for audience segmentation, resource allocation, and strategic marketing campaigns.
+        """)
 
     with method_tab:
         st.subheader("Resources")
